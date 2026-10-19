@@ -7,7 +7,7 @@
 #>
 param([switch]$Test)
 $ErrorActionPreference = 'Continue'
-$AppVersion = '0.1.0'
+$AppVersion = '0.2.0'
 
 # ---------- Auto-elevar (necesario para límites de CPU/GPU) ----------
 if (-not $Test) {
@@ -188,6 +188,7 @@ function Get-HardwareScan($gameRoot, $videoPath) {
     $r.GPU_Driver = $dgpu.DriverVersion
     $r.GPU_Todas = ($gpus | ForEach-Object { $_.Name }) -join ' + '
     $r.GPU_Nivel = Get-GpuTier $dgpu.Name
+    $r.GPU_Integrada = ($dgpu.Name -match 'Radeon\(TM\) Graphics|Radeon Graphics|Vega \d|UHD|Iris|Intel\(R\) HD') -and ($dgpu.Name -notmatch 'RX|Arc')
     $smi = Find-NvidiaSmi
     if ($r.GPU_Marca -eq 'NVIDIA' -and $smi) {
         $v = (& $smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null | Select-Object -First 1)
@@ -198,7 +199,8 @@ function Get-HardwareScan($gameRoot, $videoPath) {
     $total = ($mem | Measure-Object Capacity -Sum).Sum / 1GB
     $r.RAM_GB = Fmt $total 0
     $r.RAM_Modulos = ($mem | ForEach-Object { "$([math]::Round($_.Capacity / 1GB)) GB" }) -join ' + '
-    $r.RAM_Velocidad = "$((($mem | Measure-Object ConfiguredClockSpeed -Maximum).Maximum)) MT/s"
+    $r.RAM_MTs = [int](($mem | Measure-Object ConfiguredClockSpeed -Maximum).Maximum)
+    $r.RAM_Velocidad = "$($r.RAM_MTs) MT/s"
     $r.RAM_Canal = if ($mem.Count -ge 2) { 'probablemente doble canal' } else { 'UN SOLO CANAL (rinde menos)' }
 
     $r.Disco_Juego = 'desconocido'
@@ -233,6 +235,12 @@ function Get-Recommendation($scan) {
     if ($scan.Portatil) { $tips += 'Portátil: juega con el cargador conectado y en el modo de máximo rendimiento del fabricante.' }
     if ($scan.EnBateria) { $tips += '¡Estás en batería! La GPU rinde mucho menos así.' }
     if ($scan.RAM_Canal -match 'UN SOLO') { $tips += 'RAM en un solo canal: agregar un segundo módulo igual mejora bastante a CS2.' }
+    if ($scan.GPU_Integrada) {
+        $tips += 'Juegas con la gráfica INTEGRADA: usa la RAM como memoria de video, así que la velocidad de la RAM es clave.'
+        if ($scan.RAM_MTs -gt 0 -and $scan.RAM_MTs -lt 3000) { $tips += "Tu RAM va a $($scan.RAM_MTs) MT/s: activa XMP / DOCP / EXPO en la BIOS (normalmente 3200+). En gráficas integradas suele dar 15-25% más FPS." }
+        $tips += 'En la BIOS, sube la memoria de video asignada (UMA Frame Buffer / iGPU Memory) a 2 GB si tienes 16 GB de RAM o más.'
+        $tips += 'Vulkan puede cerrar el juego en algunas gráficas integradas: si pasa, vuelve a DirectX 11.'
+    }
     if ($scan.Disco_Juego -match 'HDD') { $tips += 'CS2 está en un disco mecánico (HDD): moverlo a un SSD reduce tirones y cargas.' }
     if ($scan.GPU_Marca -eq 'NVIDIA') { $tips += 'NVIDIA: en el Panel de control, cs2.exe -> Administración de energía: "Preferir rendimiento máximo".' }
     if ($scan.GPU_Todas -match '\+') { $tips += 'Tienes 2 GPUs: en Windows (Configuración > Pantalla > Gráficos) asigna cs2.exe a "Alto rendimiento".' }
@@ -260,6 +268,7 @@ function Build-Autoexec([string]$fps, [bool]$noContrast, [bool]$showFps) {
     ($lines -join "`r`n") + "`r`n"
 }
 function Get-PowerValue([string]$alias) {
+    powercfg -attributes SUB_PROCESSOR $alias -ATTRIB_HIDE 2>$null | Out-Null
     $hex = [regex]::Matches((powercfg /q SCHEME_CURRENT SUB_PROCESSOR $alias | Out-String), '0x[0-9a-fA-F]{8}')
     if ($hex.Count -ge 2) { return [Convert]::ToInt32($hex[$hex.Count - 2].Value, 16) }
     return $null
@@ -277,10 +286,10 @@ $HwCols = [ordered]@{
     cpu_power  = @('^CPU Package Power \[W\]', '^Potencia total de CPU \[W\]', '^CPU PPT \[W\]')
     cpu_mhz    = @('^Core Clocks \(avg\) \[MHz\]', '^Relojes n.cleo \(avg\) \[MHz\]', '^Average Effective Clock')
     cpu_use    = @('^Total CPU Usage \[%\]', '^Uso total de CPU \[%\]')
-    throttle   = @('^Core Thermal Throttling \(avg\)', '^Desaceleraci.n t.rmica del n.cleo \(avg\)', '^Thermal Throttling \(HTC\)')
+    throttle   = @('^Core Thermal Throttling \(avg\)', '^Desaceleraci.n t.rmica del n.cleo \(avg\)', '^Thermal Throttling \(HTC\)', '^Desaceleraci.n t.rmica \(HTC\)')
     gpu_temp   = @('^GPU Temperature \[.C\]', '^Temperatura de la GPU \[.C\]')
-    gpu_load   = @('^GPU Core Load \[%\]', '^Carga de n.cleo de GPU \[%\]', '^GPU Utilization \[%\]', '^GPU D3D Usage \[%\]')
-    gpu_power  = @('^GPU Power \[W\]', '^GPU Potencia \[W\]', '^Total Board Power', '^GPU ASIC Power')
+    gpu_load   = @('^GPU Core Load \[%\]', '^Carga de n.cleo de GPU \[%\]', '^GPU Utilization \[%\]', '^Utilizaci.n de GPU \[%\]', '^GPU D3D Usage \[%\]')
+    gpu_power  = @('^GPU Power \[W\]', '^GPU Potencia \[W\]', '^Total Board Power', '^GPU ASIC Power', '^GPU Core Power', '^GPU Potencia del n.cleo')
     fps        = @('^(Framerate|Cuadros por segundo)[^\[]*Presented[^\[]*\(avg\)', '^(Framerate|Cuadros por segundo)[^\[]*\(avg\)', '^(Framerate|Cuadros por segundo)[^\[]*\[FPS\]')
     fps_low    = @('^(Framerate|Cuadros por segundo)[^\[]*Presented[^\[]*1% low', '^(Framerate|Cuadros por segundo)[^\[]*1% low')
 }
@@ -311,7 +320,8 @@ function Analyze-Hwinfo([string]$path) {
     $h = $csv.Header; $idx = @{}
     foreach ($k in $HwCols.Keys) { $idx[$k] = Find-Col $h $HwCols[$k] }
     $rows = $csv.Data
-    if ($idx.fps -ge 0) { $game = @($rows | Where-Object { (To-Num $_[$idx.fps]) -gt 1 }) }
+    if ($idx.fps -ge 0 -and $idx.gpu_load -ge 0) { $game = @($rows | Where-Object { (To-Num $_[$idx.fps]) -gt 1 -and (To-Num $_[$idx.gpu_load]) -gt 30 }) }
+    elseif ($idx.fps -ge 0) { $game = @($rows | Where-Object { (To-Num $_[$idx.fps]) -gt 1 }) }
     elseif ($idx.gpu_load -ge 0) { $game = @($rows | Where-Object { (To-Num $_[$idx.gpu_load]) -gt 5 }) }
     else { $game = $rows }
     if ($game.Count -lt 10) { $game = $rows }
@@ -424,7 +434,7 @@ $cbRes = Add-Combo $g1 @() 120 22 260
 Add-Label $g1 'Calidad:' 10 57 | Out-Null
 $cbQual = Add-Combo $g1 @('No tocar (la que tengas)', 'Mínimo competitivo (todo bajo)') 120 54 260
 Add-Label $g1 'API gráfica:' 10 89 | Out-Null
-$cbApi = Add-Combo $g1 @('DirectX 11 (normal)', 'Vulkan (-vulkan)') 120 86 260
+$cbApi = Add-Combo $g1 @('DirectX 11 (normal)', 'Vulkan (-vulkan, experimental)') 120 86 260
 $chkFsr = Add-Check $g1 'FSR "Rendimiento" (más FPS, imagen más suave/borrosa)' 10 118
 
 $g2 = Add-Group $tSet 'Juego (autoexec + opciones de lanzamiento)' 8 160 625 120
@@ -563,7 +573,11 @@ function Apply-Autoexec {
     Log "autoexec: fps_max $fps"
 }
 function Apply-Launch {
-    if (Get-Process steam -EA SilentlyContinue) { Log 'Steam está abierto: NO cambié las opciones de lanzamiento. Cierra Steam y presiona APLICAR otra vez.'; return }
+    if (Get-Process steam -EA SilentlyContinue) {
+        Log 'Steam está abierto: NO cambié las opciones de lanzamiento. Cierra Steam y presiona APLICAR otra vez.'
+        [Windows.Forms.MessageBox]::Show("Steam está abierto, así que NO pude cambiar las opciones de lanzamiento (+exec autoexec / Vulkan).`n`nLo demás sí se aplicó. Cierra Steam por completo (ícono junto al reloj > Salir) y presiona APLICAR otra vez.", 'CS2 Optimizer') | Out-Null
+        return
+    }
     $cur = Get-LaunchOptions $LocalCfg
     if ($null -eq $cur) { Log 'No encontré CS2 en localconfig.vdf: pon "+exec autoexec" a mano en Steam > CS2 > Propiedades.'; return }
     $new = Merge-LaunchOptions $cur ($cbApi.SelectedIndex -eq 1) $chkThird.Checked
@@ -652,8 +666,11 @@ $bAnalyze.Add_Click({
         Log "Analizando $(Split-Path $dlg.FileName -Leaf)..."
         $a = Analyze-Hwinfo $dlg.FileName
         $label = if ($tbLabel.Text) { $tbLabel.Text } else { 'prueba ' + (Get-Date -Format 'MMdd-HHmm') }
-        $rec = [ordered]@{ fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm'); prueba = $label; resolucion = $cbRes.SelectedItem; fps_cap = $cbFps.SelectedItem
-                           api = $cbApi.SelectedItem; cpu = $cbCpu.SelectedItem; gpu_cap = $cbGpu.SelectedItem; notas = $tbNotes.Text; archivo = (Split-Path $dlg.FileName -Leaf) }
+        $ap = $null; if (Test-Path $StateF) { try { $ap = Get-Content $StateF -Raw | ConvertFrom-Json } catch {} }
+        if ($ap) { $resA = $ap.res; $fpsA = $ap.fps; $apiA = $cbApi.Items[[int]$ap.api]; $cpuA = $cbCpu.Items[[int]$ap.cpu]; $gpuA = $cbGpu.Items[[int]$ap.gpu] }
+        else { $resA = 'original (sin aplicar)'; $fpsA = '-'; $apiA = '-'; $cpuA = '-'; $gpuA = '-' }
+        $rec = [ordered]@{ fecha = (Get-Date -Format 'yyyy-MM-dd HH:mm'); prueba = $label; resolucion = $resA; fps_cap = $fpsA
+                           api = $apiA; cpu = $cpuA; gpu_cap = $gpuA; notas = $tbNotes.Text; archivo = (Split-Path $dlg.FileName -Leaf) }
         foreach ($k in 'muestras', 'fps_avg', 'fps_low_avg', 'cpu_temp_avg', 'cpu_temp_max', 'throttle_pct', 'cpu_power_avg', 'cpu_mhz_avg', 'cpu_use_avg', 'gpu_temp_avg', 'gpu_temp_max', 'gpu_load_avg', 'gpu_power_avg') {
             $rec[$k] = if ($a.PSObject.Properties[$k]) { $a.$k } else { '' }
         }
