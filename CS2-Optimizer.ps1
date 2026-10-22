@@ -7,7 +7,7 @@
 #>
 param([switch]$Test)
 $ErrorActionPreference = 'Continue'
-$AppVersion = '0.2.0'
+$AppVersion = '0.2.1'
 
 # ---------- Auto-elevar (necesario para límites de CPU/GPU) ----------
 if (-not $Test) {
@@ -200,6 +200,7 @@ function Get-HardwareScan($gameRoot, $videoPath) {
     $r.RAM_GB = Fmt $total 0
     $r.RAM_Modulos = ($mem | ForEach-Object { "$([math]::Round($_.Capacity / 1GB)) GB" }) -join ' + '
     $r.RAM_MTs = [int](($mem | Measure-Object ConfiguredClockSpeed -Maximum).Maximum)
+    $r.RAM_MTs_Max = [int](($mem | Measure-Object Speed -Minimum).Minimum)   # velocidad que reportan los módulos (el más lento manda)
     $r.RAM_Velocidad = "$($r.RAM_MTs) MT/s"
     $r.RAM_Canal = if ($mem.Count -ge 2) { 'probablemente doble canal' } else { 'UN SOLO CANAL (rinde menos)' }
 
@@ -237,8 +238,11 @@ function Get-Recommendation($scan) {
     if ($scan.RAM_Canal -match 'UN SOLO') { $tips += 'RAM en un solo canal: agregar un segundo módulo igual mejora bastante a CS2.' }
     if ($scan.GPU_Integrada) {
         $tips += 'Juegas con la gráfica INTEGRADA: usa la RAM como memoria de video, así que la velocidad de la RAM es clave.'
-        if ($scan.RAM_MTs -gt 0 -and $scan.RAM_MTs -lt 3000) { $tips += "Tu RAM va a $($scan.RAM_MTs) MT/s: activa XMP / DOCP / EXPO en la BIOS (normalmente 3200+). En gráficas integradas suele dar 15-25% más FPS." }
-        $tips += 'En la BIOS, sube la memoria de video asignada (UMA Frame Buffer / iGPU Memory) a 2 GB si tienes 16 GB de RAM o más.'
+        if ($scan.RAM_MTs -gt 0 -and $scan.RAM_MTs -lt 3000) {
+            $tips += "Tu RAM va a $($scan.RAM_MTs) MT/s. Más velocidad de RAM = más FPS en gráfica integrada, PERO solo si tus módulos la soportan."
+            $tips += 'Antes de tocar la BIOS: mira la etiqueta de la RAM (ej. 3200 MHz). Si dice 2400 o no tiene perfil XMP/DOCP, NO lo actives: el PC puede volverse inestable.'
+            $tips += 'Si decides probar XMP/DOCP y CS2 se cierra o el PC se reinicia, desactívalo (o restablece la BIOS) de inmediato. Es opcional y bajo tu responsabilidad.'
+        }
         $tips += 'Vulkan puede cerrar el juego en algunas gráficas integradas: si pasa, vuelve a DirectX 11.'
     }
     if ($scan.Disco_Juego -match 'HDD') { $tips += 'CS2 está en un disco mecánico (HDD): moverlo a un SSD reduce tirones y cargas.' }
